@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
 use Illuminate\Database\Eloquent\Relations\MorphToMany;
+use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Expression;
 use Illuminate\Support\Facades\Config;
@@ -526,7 +527,7 @@ class QueryBuilderEngine extends BaseEngine
                     $pivot   = $model->getTable();
                     $pivotPK = $model->getExistenceCompareKey();
                     $pivotFK = $model->getQualifiedParentKeyName();
-                    $this->performJoin($pivot, $pivotPK, $pivotFK);
+                    $this->performJoin($pivot, [[$pivotPK, '=', $pivotFK]]);
 
                     $related = $model->getRelated();
                     $table   = $related->getTable();
@@ -535,7 +536,7 @@ class QueryBuilderEngine extends BaseEngine
                     $other   = $related->getQualifiedKeyName();
 
                     $lastQuery->addSelect($table . '.' . $relationColumn);
-                    $this->performJoin($table, $foreign, $other);
+                    $this->performJoin($table, [[$foreign, '=', $other]]);
 
                     break;
 
@@ -561,7 +562,14 @@ class QueryBuilderEngine extends BaseEngine
                         $other   = $model->getQualifiedOwnerKeyName();
                     }
             }
-            $this->performJoin($table, $foreign, $other);
+            $select = $this->getQueryBuilder()->from . '.*';
+            $joinConditions[] = [$foreign, '=', $other];
+            if ($model instanceof MorphOneOrMany) {
+                $joinConditions[] = [$model->getQualifiedMorphType(), '=',
+                    \DB::raw(\DB::connection()->getPdo()->quote($model->getMorphClass()))];
+            }
+            $this->getQueryBuilder()->selectRaw($select);
+            $this->performJoin($table, $joinConditions);
             $lastQuery = $model->getQuery();
         }
 
@@ -575,7 +583,7 @@ class QueryBuilderEngine extends BaseEngine
      * @param string $foreign
      * @param string $other
      */
-    protected function performJoin($table, $foreign, $other)
+    protected function performJoin($table, array $conditions)
     {
         $joins = [];
         foreach ((array) $this->getQueryBuilder()->joins as $key => $join) {
@@ -583,7 +591,11 @@ class QueryBuilderEngine extends BaseEngine
         }
 
         if (! in_array($table, $joins)) {
-            $this->getQueryBuilder()->leftJoin($table, $foreign, '=', $other);
+            $this->getQueryBuilder()->leftJoin($table, function($join) use ($conditions) {
+                foreach ($conditions as $condition) {
+                    $join->on($condition[0], $condition[1], $condition[2]);
+                }
+            });
         }
     }
 
@@ -648,6 +660,12 @@ class QueryBuilderEngine extends BaseEngine
             if ($this->hasCustomOrder($column)) {
                 $method     = $this->columnDef['order'][$column]['method'];
                 $parameters = $this->columnDef['order'][$column]['parameters'];
+                // determine if the custom order is a nested field
+                $splitted = explode('.', $column);
+                if (count($splitted) > 1) {
+                    // only support one level deep for now
+                    $column = $this->joinEagerLoadedColumn($splitted[0], $splitted[1]);
+                }
                 $this->compileColumnQuery(
                     $this->getQueryBuilder(),
                     $method,
