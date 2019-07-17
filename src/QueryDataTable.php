@@ -190,8 +190,8 @@ class QueryDataTable extends DataTableAbstract
         $table   = $this->connection->raw('(' . $builder->toSql() . ') count_row_table');
 
         return $this->connection->table($table)
-                                ->setBindings($builder->getBindings())
-                                ->count();
+            ->setBindings($builder->getBindings())
+            ->count();
     }
 
     /**
@@ -669,6 +669,12 @@ class QueryDataTable extends DataTableAbstract
      */
     protected function applyOrderColumn($column, $orderable)
     {
+        // determine if the custom order is a nested field
+        $splitted = explode('.', $column);
+        if (count($splitted) > 1 && method_exists($this, 'joinEagerLoadedColumn')) {
+            // only support one level deep for now
+            $column = $this->joinEagerLoadedColumn($splitted[0], $splitted[1]);
+        }
         $sql      = $this->columnDef['order'][$column]['sql'];
         $sql      = str_replace('$1', $orderable['direction'], $sql);
         $bindings = $this->columnDef['order'][$column]['bindings'];

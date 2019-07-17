@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
+use Illuminate\Support\Facades\DB;
 
 class EloquentDataTable extends QueryDataTable
 {
@@ -146,7 +148,7 @@ class EloquentDataTable extends QueryDataTable
                     $pivot   = $model->getTable();
                     $pivotPK = $model->getExistenceCompareKey();
                     $pivotFK = $model->getQualifiedParentKeyName();
-                    $this->performJoin($pivot, $pivotPK, $pivotFK);
+                    $this->performJoin($pivot, [[$pivotPK, '=', $pivotFK]]);
 
                     $related = $model->getRelated();
                     $table   = $related->getTable();
@@ -155,7 +157,7 @@ class EloquentDataTable extends QueryDataTable
                     $other   = $related->getQualifiedKeyName();
 
                     $lastQuery->addSelect($table . '.' . $relationColumn);
-                    $this->performJoin($table, $foreign, $other);
+                    $this->performJoin($table, [[$foreign, '=', $other]]);
 
                     break;
 
@@ -174,7 +176,14 @@ class EloquentDataTable extends QueryDataTable
                 default:
                     throw new Exception('Relation ' . get_class($model) . ' is not yet supported.');
             }
-            $this->performJoin($table, $foreign, $other);
+            $select = $this->getBaseQueryBuilder()->from . '.*';
+            $joinConditions[] = [$foreign, '=', $other];
+            if ($model instanceof MorphOneOrMany) {
+                $joinConditions[] = [$model->getQualifiedMorphType(), '=',
+                    DB::raw(DB::connection()->getPdo()->quote($model->getMorphClass()))];
+            }
+            $this->getBaseQueryBuilder()->selectRaw($select);
+            $this->performJoin($table, $joinConditions);
             $lastQuery = $model->getQuery();
         }
 
@@ -189,7 +198,7 @@ class EloquentDataTable extends QueryDataTable
      * @param string $other
      * @param string $type
      */
-    protected function performJoin($table, $foreign, $other, $type = 'left')
+    protected function performJoin($table, array $conditions, $type = 'left')
     {
         $joins = [];
         foreach ((array) $this->getBaseQueryBuilder()->joins as $key => $join) {
@@ -197,7 +206,11 @@ class EloquentDataTable extends QueryDataTable
         }
 
         if (! in_array($table, $joins)) {
-            $this->getBaseQueryBuilder()->join($table, $foreign, '=', $other, $type);
+            $this->getBaseQueryBuilder()->leftJoin($table, function($join) use ($conditions) {
+                foreach ($conditions as $condition) {
+                    $join->on($condition[0], $condition[1], $condition[2]);
+                }
+            });
         }
     }
 }
